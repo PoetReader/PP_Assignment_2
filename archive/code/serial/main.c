@@ -42,7 +42,7 @@ RGB GetPixel(RGB *img, const int width, const int height, const int x, const int
 {
     if (x < 0 || y < 0 || x >= width || y >= height)
     {
-        int approxX = MIN(MAX(x, 0), width); // out of bounds?
+        int approxX = MIN(MAX(x, 0), width);
         int approxY = MIN(MAX(y, 0), height);
         return (img[approxX + approxY * width]);
     }
