@@ -155,6 +155,7 @@ void ApplySobelParallel(int rank, RGB *tile_img, const int width, const int uppe
     }
 }
 
+
 void ApplyEmboss(RGB *tile, const int width, const int height)
 {
     /*1. Ein 3x3 Emboss Kernel K
@@ -162,6 +163,7 @@ void ApplyEmboss(RGB *tile, const int width, const int height)
     Clamping auf [0,255] anwenden.
     */
 }
+
 
 int main(int argc, char *argv[])
 {
@@ -244,8 +246,22 @@ int main(int argc, char *argv[])
     // End timer
     clock_gettime(CLOCK_MONOTONIC, &end); // finish measuring the time
     double local_elapsed = (end.tv_sec - start_timer.tv_sec) + (end.tv_nsec - start_timer.tv_nsec) / 1e9;
+
+    // Start timer to measure gathering time
+    MPI_Barrier(MPI_COMM_WORLD);
+    struct timespec start_timer_run, end_run;
+    clock_gettime(CLOCK_MONOTONIC, &start_timer_run);
+
+
     // each rank sends their tile without halo rows and rank 0 gathers the tiles
     MPI_Gatherv(tile_output, rows, rowtype, img, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
+
+       // End timer to measure gathering time
+    clock_gettime(CLOCK_MONOTONIC, &end_run); // finish measuring the time
+    double local_elapsed_run = (end_run.tv_sec - start_timer_run.tv_sec) + (end_run.tv_nsec - start_timer_run.tv_nsec) / 1e9;
+    double max_elapsed_run;
+    MPI_Reduce(&local_elapsed_run, &max_elapsed_run, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+
 
     // get slowest rank
     double max_elapsed;
@@ -268,7 +284,7 @@ int main(int argc, char *argv[])
     {
         CreateBMP(outsobel, width, height);
         WriteRegion(outsobel, 0, 0, width, height, img);
-        printf("Time: %.9f seconds\n", max_elapsed);
+        printf("Time: %.9f seconds\nTime to put everything together: %.9f\n", max_elapsed, max_elapsed_run);
     }
     // CreateBMP(outemboss, width, height);
     // WriteRegion(outemboss, 0, 0, width, height, emboss);

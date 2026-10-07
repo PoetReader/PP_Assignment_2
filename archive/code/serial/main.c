@@ -21,7 +21,7 @@ void ImageToGrayscale(RGB *img, const int width, const int height)
 {
     for (int i = 0; i < width * height; i++)
     {
-        char grayscale = img[i].red * 0.3 + img[i].green * 0.59 + img[i].blue * 0.11;
+        unsigned char grayscale = img[i].red * 0.3 + img[i].green * 0.59 + img[i].blue * 0.11;
         img[i].red = grayscale;
         img[i].green = grayscale;
         img[i].blue = grayscale;
@@ -42,8 +42,8 @@ RGB GetPixel(RGB *img, const int width, const int height, const int x, const int
 {
     if (x < 0 || y < 0 || x >= width || y >= height)
     {
-        int approxX = MIN(MAX(x, 0), width);
-        int approxY = MIN(MAX(y, 0), height);
+        int approxX = MIN(MAX(x, 0), width-1);
+        int approxY = MIN(MAX(y, 0), height-1);
         return (img[approxX + approxY * width]);
     }
     return (img[x + y * width]);
@@ -80,7 +80,7 @@ void ApplySobel(RGB *img, const int width, const int height)
             float pixel_x = 0.0f;
             float pixel_y = 0.0f;
 
-            // Convolusion iterating over neighbouring pixels as well
+            // Convolusion iterating over neighbouring pixels
             for (int con_x = -1; con_x <= 1; con_x++)
             {
                 for (int con_y = -1; con_y <= 1; con_y++)
@@ -150,9 +150,7 @@ int main(int argc, char *argv[])
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
     ApplySobel(sobel, width, height);
-    clock_gettime(CLOCK_MONOTONIC, &end); // finish measuring the time
-    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-    printf("Time: %.3f seconds\n", elapsed);
+    
     // ApplyEmboss(emboss, width, height);
 
     // Save images
@@ -160,6 +158,11 @@ int main(int argc, char *argv[])
     WriteRegion(outsobel, 0, 0, width, height, sobel);
     // CreateBMP(outemboss, width, height);
     // WriteRegion(outemboss, 0, 0, width, height, emboss);
+
+    //End timer
+    clock_gettime(CLOCK_MONOTONIC, &end); 
+    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    printf("Time: %.3f seconds\n", elapsed);
 
     // Free memory
     free(sobel);
