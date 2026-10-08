@@ -318,18 +318,6 @@ int main(int argc, char *argv[])
     double max_elapsed;
     MPI_Reduce(&local_elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
-    // Init memory
-    // RGB *sobel = malloc(sizeof(RGB) * width * height);
-    // RGB *emboss = malloc(sizeof(RGB) * width * height);
-
-    // Load images
-    // LoadRegion(marguerite, 0, 0, width, height, sobel);
-    // LoadRegion(marguerite, 0, 0, width, height, emboss);
-
-    // Apply filters
-    // start measuring the time
-
-    // ApplyEmboss(emboss, width, height);
 
     if (rank == 0)
     {

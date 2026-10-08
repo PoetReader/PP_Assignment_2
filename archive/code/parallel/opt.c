@@ -93,7 +93,7 @@ RGB GetPixel(RGB *img, const int width, const int height, const int x, const int
 }
 
 /**
- * @brief Calculate the convolution of a pixel
+ * @brief Calculate the convolution of a pixel for Sobel filtering
  * @param up
  * @param mid
  * @param down
@@ -118,7 +118,7 @@ void SobelPixel(const RGB *up, const RGB *mid, const RGB *down, int xl, int x, i
 }
 
 /**
- * @brief Apply Sobel filter to image
+ * @brief Apply Sobel filter to image parallel
  * @param rank
  * @param tile_img
  * @param width
@@ -155,12 +155,65 @@ void ApplySobelParallel(int rank, RGB *tile_img, const int width, const int uppe
     }
 }
 
-void ApplyEmboss(RGB *tile, const int width, const int height)
+/**
+ * @brief Calculate the convolution of a pixel for Emboss filtering
+ * @param up
+ * @param mid
+ * @param down
+ * @param x_left
+ * @param x
+ * @param x_right
+ * @param out
+ * @param idx
+ */
+void EmbossPixel(const RGB *up, const RGB *mid, const RGB *down, int xl, int x, int xr, RGB *out, int idx)
 {
-    /*1. Ein 3x3 Emboss Kernel K
-    2. Faltung durchführen, Bias addieren ?
-    Clamping auf [0,255] anwenden.
-    */
+    // leave out index where multiplicator is 0 and already use factor out the minus
+    int sum = -2 * up[xl].red - 1 * up[x].red - mid[xl].red + mid[x].red + mid[xr].red + down[x].red + 2 * down[xr].red;
+
+    unsigned char res = (unsigned char)MIN(MAX(sum, 0), 255);
+
+    out[idx].red = res;
+    out[idx].green = res;
+    out[idx].blue = res;
+}
+
+/**
+ * @brief Apply Emboss filter to image parallel
+ * @param rank
+ * @param tile_img
+ * @param width
+ * @param upper_halo
+ * @param lower_halo
+ * @param rows
+ * @param tile_output
+ */
+void ApplyEmbossParallel(int rank, RGB *tile_img, const int width, const int upper_halo,
+                        const int lower_halo, const int rows, RGB *tile_output)
+{
+     const int local_height = upper_halo + lower_halo + rows;
+
+#pragma omp parallel for schedule(static)
+    for (int y = upper_halo; y < upper_halo + rows; y++) // iterate through the rows
+    {
+        // part 9x9 neighbourhood into rows array move pointer to start location of up, mid or down
+        RGB *up = tile_img + (size_t)MAX(y - 1, 0) * width;
+        RGB *mid = tile_img + (size_t)y * width;
+        RGB *down = tile_img + (size_t)MIN(y + 1, local_height - 1) * width;
+        RGB *out = tile_output + (size_t)(y - upper_halo) * width;
+
+        // Left pixel of the row
+        EmbossPixel(up, mid, down, 0, 0, MIN(1, width - 1), out, 0);
+
+        // inner pixel iterating through the pixels in a row
+        for (int x = 1; x < width - 1; x++)
+        {
+            EmbossPixel(up, mid, down, x - 1, x, x + 1, out, x);
+        }
+
+        // right pixel of the row
+        EmbossPixel(up, mid, down, MAX(width - 2, 0), width - 1, width - 1, out, width - 1);
+    }
 }
 
 int main(int argc, char *argv[])
@@ -184,10 +237,12 @@ int main(int argc, char *argv[])
 
     const char *marguerite = argv[1];
     const char *outsobel = "sobelparallel.bmp";
-    // const char *outemboss = "emboss.bmp";
+    const char *outemboss = "emboss.bmp";
 
     int width, height; // Get image dimensions
     RGB *img;
+    RGB *sobel_full;
+    RGB *emboss_full;
 
     if (rank == 0) // Rank 0 gets image dimension
     {
@@ -200,6 +255,13 @@ int main(int argc, char *argv[])
     MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
+    //alloc sobel_full and emboss_full
+    if (rank == 0)
+    {
+        sobel_full = malloc(sizeof(RGB) * (size_t)width * height);
+        emboss_full = malloc(sizeof(RGB) * (size_t)width * height);
+    }
+    
     // Tiling
     int start, rows, upper_halo, lower_halo;
     GetTiles(rank, size, height, &start, &rows, &upper_halo, &lower_halo);
@@ -225,9 +287,8 @@ int main(int argc, char *argv[])
 
     // Init mem for tile with halo rows, and tile output without halo rows
     RGB *tile_img = (RGB *)malloc((size_t)used_rows * width * sizeof(RGB));
-    RGB *tile_output = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
-
-    
+    RGB *tile_output_sobel = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
+    RGB *tile_output_emboss = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
 
     // rank 0 sends tiles (with halo rows) and each rank receives its tile to work upon
     MPI_Scatterv(img, total_rows, start_rows, rowtype, tile_img, used_rows, rowtype, 0, MPI_COMM_WORLD);
@@ -241,7 +302,8 @@ int main(int argc, char *argv[])
 
     ImageToGrayscaleParallel(tile_img, total_pixels);
 
-    ApplySobelParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output);
+    ApplySobelParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_sobel);
+    ApplyEmbossParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_emboss);
 
     // End timer
     clock_gettime(CLOCK_MONOTONIC, &end); // finish measuring the time
@@ -253,8 +315,9 @@ int main(int argc, char *argv[])
     struct timespec start_timer_run, end_run;
     clock_gettime(CLOCK_MONOTONIC, &start_timer_run);
 
-
-    MPI_Gatherv(tile_output, rows, rowtype, img, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
+    // each rank sends their tile without halo rows and rank 0 gathers the tiles
+    MPI_Gatherv(tile_output_sobel, rows, rowtype, img, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
+    MPI_Gatherv(tile_output_emboss, rows, rowtype, emboss_full, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
 
     // End timer to measure gathering time
     clock_gettime(CLOCK_MONOTONIC, &end_run); // finish measuring the time
@@ -266,34 +329,25 @@ int main(int argc, char *argv[])
     double max_elapsed;
     MPI_Reduce(&local_elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
-    // Init memory
-    // RGB *sobel = malloc(sizeof(RGB) * width * height);
-    // RGB *emboss = malloc(sizeof(RGB) * width * height);
-
-    // Load images
-    // LoadRegion(marguerite, 0, 0, width, height, sobel);
-    // LoadRegion(marguerite, 0, 0, width, height, emboss);
-
-    // Apply filters
-    // start measuring the time
-
-    // ApplyEmboss(emboss, width, height);
 
     if (rank == 0)
     {
         CreateBMP(outsobel, width, height);
-        WriteRegion(outsobel, 0, 0, width, height, img);
+        WriteRegion(outsobel, 0, 0, width, height, sobel_full);
+        CreateBMP(outemboss, width, height);
+        WriteRegion(outemboss, 0, 0, width, height, emboss_full);
         printf("Time: %.9f seconds\nTime to put everything together: %.9f\n", max_elapsed, max_elapsed_run);
     }
-    // CreateBMP(outemboss, width, height);
-    // WriteRegion(outemboss, 0, 0, width, height, emboss);
-
+ 
     // Free memory
     free(tile_img);
-    free(tile_output);
+    free(tile_output_sobel);
+    free(tile_output_emboss);
     if (rank == 0)
     {
         free(img);
+        free(sobel_full);
+        free(emboss_full);
         free(total_rows);
         free(start_rows);
         free(true_rows);
@@ -302,8 +356,6 @@ int main(int argc, char *argv[])
     MPI_Type_free(&rowtype); // free MPI type
 
     MPI_Finalize();
-
-    // free(emboss);
-
+    
     return (0);
 }
