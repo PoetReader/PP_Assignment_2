@@ -197,7 +197,7 @@ int main(int argc, char *argv[])
     // End timer
     clock_gettime(CLOCK_MONOTONIC, &end);
     double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-    printf("Time: %.3f seconds\n", elapsed);
+    printf("Time to apply sobel and emboss: %.3f seconds\n", elapsed);
 
     // Free memory
     // free(sobel);
