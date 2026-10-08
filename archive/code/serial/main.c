@@ -5,7 +5,6 @@
 #include <string.h>
 #include <time.h>
 
-
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
 #define GP(X, Y) GetPixel(img, width, height, (X), (Y))
@@ -42,8 +41,8 @@ RGB GetPixel(RGB *img, const int width, const int height, const int x, const int
 {
     if (x < 0 || y < 0 || x >= width || y >= height)
     {
-        int approxX = MIN(MAX(x, 0), width-1);
-        int approxY = MIN(MAX(y, 0), height-1);
+        int approxX = MIN(MAX(x, 0), width - 1);
+        int approxY = MIN(MAX(y, 0), height - 1);
         return (img[approxX + approxY * width]);
     }
     return (img[x + y * width]);
@@ -108,16 +107,52 @@ void ApplySobel(RGB *img, const int width, const int height)
     }
     // copy temp image to img
     memcpy(img, temp, sizeof(RGB) * width * height);
-    //free buffer
+    // free buffer
     free(temp);
 }
 
 void ApplyEmboss(RGB *img, const int width, const int height)
 {
-    /*1. Ein 3x3 Emboss Kernel K
-    2. Faltung durchführen, Bias addieren ?
-    Clamping auf [0,255] anwenden.
-    */
+    // First use ImageToGrayScale on image
+    ImageToGrayscale(img, width, height);
+
+    // choose basic emboss kernel
+    const int Kernel[3][3] = {
+        {-2, -1, 0},
+        {-1, 1, 1},
+        {0, 1, 2}};
+
+    // temp buffer for calc
+    RGB *temp = (RGB *)malloc(sizeof(RGB) * width * height);
+    // convolusion over each pixel
+    for (int x = 0; x < width; x++)
+    {
+        for (int y = 0; y < height; y++)
+        {
+            int sum = 0;
+            for (int con_y = -1; con_y <= 1; con_y++)
+            {
+                // sum up the terms
+                for (int con_x = -1; con_x <= 1; con_x++)
+                {
+
+                    RGB pixel = GetPixel(img, width, height, x + con_x, y + con_y);
+                    sum += pixel.red * Kernel[con_y + 1][con_x + 1];
+                }
+            }
+            unsigned char res = (unsigned char)MIN(MAX(sum, 0), 255);
+
+            int index = x + y * width;
+            temp[index].red = res;
+            temp[index].green = res;
+            temp[index].blue = res;
+        }
+    }
+
+    // copy temp image to img
+    memcpy(img, temp, sizeof(RGB) * width * height);
+    // free buffer
+    free(temp);
 }
 
 int main(int argc, char *argv[])
@@ -130,43 +165,43 @@ int main(int argc, char *argv[])
     }
 
     const char *marguerite = argv[1];
-    const char *outsobel = "sobel.bmp";
-    // const char *outemboss = "emboss.bmp";
+    // const char *outsobel = "sobel.bmp";
+    const char *outemboss = "emboss.bmp";
 
     // Get image dimensions
     int width, height;
     GetSize(marguerite, &width, &height);
 
     // Init memory
-    RGB *sobel = malloc(sizeof(RGB) * width * height);
-    // RGB *emboss = malloc(sizeof(RGB) * width * height);
+    // RGB *sobel = malloc(sizeof(RGB) * width * height);
+    RGB *emboss = malloc(sizeof(RGB) * width * height);
 
     // Load images
-    LoadRegion(marguerite, 0, 0, width, height, sobel);
-    // LoadRegion(marguerite, 0, 0, width, height, emboss);
+    // LoadRegion(marguerite, 0, 0, width, height, sobel);
+    LoadRegion(marguerite, 0, 0, width, height, emboss);
 
     // Apply filters
     // start measuring the time
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    ApplySobel(sobel, width, height);
-    
-    // ApplyEmboss(emboss, width, height);
+    // ApplySobel(sobel, width, height);
+
+    ApplyEmboss(emboss, width, height);
 
     // Save images
-    CreateBMP(outsobel, width, height);
-    WriteRegion(outsobel, 0, 0, width, height, sobel);
-    // CreateBMP(outemboss, width, height);
-    // WriteRegion(outemboss, 0, 0, width, height, emboss);
+    // CreateBMP(outsobel, width, height);
+    // WriteRegion(outsobel, 0, 0, width, height, sobel);
+    CreateBMP(outemboss, width, height);
+    WriteRegion(outemboss, 0, 0, width, height, emboss);
 
-    //End timer
-    clock_gettime(CLOCK_MONOTONIC, &end); 
+    // End timer
+    clock_gettime(CLOCK_MONOTONIC, &end);
     double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
     printf("Time: %.3f seconds\n", elapsed);
 
     // Free memory
-    free(sobel);
-    // free(emboss);
+    // free(sobel);
+    free(emboss);
 
     return (0);
 }
