@@ -165,7 +165,7 @@ int main(int argc, char *argv[])
     }
 
     const char *marguerite = argv[1];
-    // const char *outsobel = "sobel.bmp";
+    const char *outsobel = "sobel.bmp";
     const char *outemboss = "emboss.bmp";
 
     // Get image dimensions
@@ -173,18 +173,18 @@ int main(int argc, char *argv[])
     GetSize(marguerite, &width, &height);
 
     // Init memory
-    // RGB *sobel = malloc(sizeof(RGB) * width * height);
+    RGB *sobel = malloc(sizeof(RGB) * width * height);
     RGB *emboss = malloc(sizeof(RGB) * width * height);
 
     // Load images
-    // LoadRegion(marguerite, 0, 0, width, height, sobel);
+    LoadRegion(marguerite, 0, 0, width, height, sobel);
     LoadRegion(marguerite, 0, 0, width, height, emboss);
 
     // Apply filters
     // start measuring the time
     struct timespec start, end;
     clock_gettime(CLOCK_MONOTONIC, &start);
-    // ApplySobel(sobel, width, height);
+    ApplySobel(sobel, width, height);
 
     ApplyEmboss(emboss, width, height);
 
@@ -193,16 +193,14 @@ int main(int argc, char *argv[])
     double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
     printf("Time to apply sobel and emboss: %.3f seconds\n", elapsed);
 
-    
     // Save images
-    // CreateBMP(outsobel, width, height);
-    // WriteRegion(outsobel, 0, 0, width, height, sobel);
+    CreateBMP(outsobel, width, height);
+    WriteRegion(outsobel, 0, 0, width, height, sobel);
     CreateBMP(outemboss, width, height);
     WriteRegion(outemboss, 0, 0, width, height, emboss);
 
-    
     // Free memory
-    // free(sobel);
+    free(sobel);
     free(emboss);
 
     return (0);
