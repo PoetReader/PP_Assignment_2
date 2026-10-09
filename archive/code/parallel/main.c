@@ -175,32 +175,25 @@ void ApplyEmbossParallel(int rank, RGB *tile_img, const int width, const int upp
 
     int local_height = upper_halo + lower_halo + rows; // calc local height basically used_rows
 
-#pragma omp parallel
-    {
-#pragma omp master
-        {
-            printf("Emboss Filter => Rank %d: %d threads working\n", rank, omp_get_num_threads());
-        }
 #pragma omp parallel for collapse(2) schedule(static) // parallellise
-        for (int y = upper_halo; y < (upper_halo + rows); y++)
+    for (int y = upper_halo; y < (upper_halo + rows); y++)
+    {
+        for (int x = 0; x < width; x++)
         {
-            for (int x = 0; x < width; x++)
+            int sum = 0;
+            for (int con_y = -1; con_y <= 1; con_y++)
             {
-                int sum = 0;
-                for (int con_y = -1; con_y <= 1; con_y++)
+                for (int con_x = -1; con_x <= 1; con_x++)
                 {
-                    for (int con_x = -1; con_x <= 1; con_x++)
-                    {
-                        RGB pixel = GetPixel(tile_img, width, local_height, x + con_x, y + con_y);
-                        sum += pixel.red * Kernel[con_y + 1][con_x + 1];
-                    }
+                    RGB pixel = GetPixel(tile_img, width, local_height, x + con_x, y + con_y);
+                    sum += pixel.red * Kernel[con_y + 1][con_x + 1];
                 }
-                unsigned char res = (unsigned char)MIN(MAX(sum, 0), 255);
-                size_t index = (size_t)(y - upper_halo) * width + x; // remember the halo row
-                tile_output[index].red = res;
-                tile_output[index].green = res;
-                tile_output[index].blue = res;
             }
+            unsigned char res = (unsigned char)MIN(MAX(sum, 0), 255);
+            size_t index = (size_t)(y - upper_halo) * width + x; // remember the halo row
+            tile_output[index].red = res;
+            tile_output[index].green = res;
+            tile_output[index].blue = res;
         }
     }
 }
@@ -244,8 +237,7 @@ int main(int argc, char *argv[])
     MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-
-    //alloc sobel_full and emboss_full
+    // alloc sobel_full and emboss_full
     if (rank == 0)
     {
         sobel_full = malloc(sizeof(RGB) * (size_t)width * height);
@@ -317,7 +309,6 @@ int main(int argc, char *argv[])
     // get slowest rank
     double max_elapsed;
     MPI_Reduce(&local_elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-
 
     if (rank == 0)
     {
