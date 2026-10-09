@@ -188,17 +188,19 @@ int main(int argc, char *argv[])
 
     ApplyEmboss(emboss, width, height);
 
+    // End timer
+    clock_gettime(CLOCK_MONOTONIC, &end);
+    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
+    printf("Time to apply sobel and emboss: %.3f seconds\n", elapsed);
+
+    
     // Save images
     // CreateBMP(outsobel, width, height);
     // WriteRegion(outsobel, 0, 0, width, height, sobel);
     CreateBMP(outemboss, width, height);
     WriteRegion(outemboss, 0, 0, width, height, emboss);
 
-    // End timer
-    clock_gettime(CLOCK_MONOTONIC, &end);
-    double elapsed = (end.tv_sec - start.tv_sec) + (end.tv_nsec - start.tv_nsec) / 1e9;
-    printf("Time to apply sobel and emboss: %.3f seconds\n", elapsed);
-
+    
     // Free memory
     // free(sobel);
     free(emboss);
