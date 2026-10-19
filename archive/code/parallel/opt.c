@@ -7,7 +7,6 @@
 
 #include <omp.h>
 
-#include <time.h>
 
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
@@ -297,8 +296,7 @@ int main(int argc, char *argv[])
 
     // Start timer
     MPI_Barrier(MPI_COMM_WORLD);
-    struct timespec start_timer, end;
-    clock_gettime(CLOCK_MONOTONIC, &start_timer);
+    double start_timer = MPI_Wtime();
 
     ImageToGrayscaleParallel(tile_img, total_pixels);
 
@@ -306,22 +304,19 @@ int main(int argc, char *argv[])
     ApplyEmbossParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_emboss);
 
     // End timer
-    clock_gettime(CLOCK_MONOTONIC, &end); // finish measuring the time
-    double local_elapsed = (end.tv_sec - start_timer.tv_sec) + (end.tv_nsec - start_timer.tv_nsec) / 1e9;
+    double local_elapsed = MPI_Wtime() - start_timer;
     // each rank sends their tile without halo rows and rank 0 gathers the tiles
 
     // Start timer to measure gathering time
     MPI_Barrier(MPI_COMM_WORLD);
-    struct timespec start_timer_run, end_run;
-    clock_gettime(CLOCK_MONOTONIC, &start_timer_run);
+    double start_timer_run = MPI_Wtime();
 
     // each rank sends their tile without halo rows and rank 0 gathers the tiles
     MPI_Gatherv(tile_output_sobel, rows, rowtype, img, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
     MPI_Gatherv(tile_output_emboss, rows, rowtype, emboss_full, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
 
     // End timer to measure gathering time
-    clock_gettime(CLOCK_MONOTONIC, &end_run); // finish measuring the time
-    double local_elapsed_run = (end_run.tv_sec - start_timer_run.tv_sec) + (end_run.tv_nsec - start_timer_run.tv_nsec) / 1e9;
+    double local_elapsed_run = MPI_Wtime() - start_timer_run;
     double max_elapsed_run;
     MPI_Reduce(&local_elapsed_run, &max_elapsed_run, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
