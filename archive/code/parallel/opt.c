@@ -7,7 +7,6 @@
 
 #include <omp.h>
 
-
 #define MIN(a, b) ((a) < (b) ? (a) : (b))
 #define MAX(a, b) ((a) < (b) ? (b) : (a))
 
@@ -34,21 +33,17 @@ static void GetTiles(int rank, int size, int height, int *start, int *rows, int 
  * @brief Build the scatter and gather table to use MPI_Scatterv() and MPI_Gatherv()
  * @param size
  * @param height
- * @param total_rows
- * @param start_rows
  * @param true_rows
  * @param true_start
  */
-static void BuildScatterGather(int size, int height, int *total_rows, int *start_rows, int *true_rows, int *true_start)
+static void BuildScatterGather(int size, int height, int *true_rows, int *true_start)
 {
     for (int rank = 0; rank < size; rank++)
     {
         int start, rows, upper_halo, lower_halo;
         GetTiles(rank, size, height, &start, &rows, &upper_halo, &lower_halo);
-        total_rows[rank] = rows + lower_halo + upper_halo; // get rows including halo rows
-        start_rows[rank] = start - upper_halo;             // start including halo rows to send to ranks
-        true_rows[rank] = rows;                            // send rows without halo back
-        true_start[rank] = start;                          // get start of a tile without halo
+        true_rows[rank] = rows;   // core rows of the tile (without halo)
+        true_start[rank] = start; // first core row of the tile
     }
 }
 
@@ -188,9 +183,9 @@ void EmbossPixel(const RGB *up, const RGB *mid, const RGB *down, int xl, int x, 
  * @param tile_output
  */
 void ApplyEmbossParallel(int rank, RGB *tile_img, const int width, const int upper_halo,
-                        const int lower_halo, const int rows, RGB *tile_output)
+                         const int lower_halo, const int rows, RGB *tile_output)
 {
-     const int local_height = upper_halo + lower_halo + rows;
+    const int local_height = upper_halo + lower_halo + rows;
 
 #pragma omp parallel for schedule(static)
     for (int y = upper_halo; y < upper_halo + rows; y++) // iterate through the rows
@@ -213,6 +208,55 @@ void ApplyEmbossParallel(int rank, RGB *tile_img, const int width, const int upp
         // right pixel of the row
         EmbossPixel(up, mid, down, MAX(width - 2, 0), width - 1, width - 1, out, width - 1);
     }
+}
+
+/**
+ * @brief Exchange halo rows with the neighbouring ranks
+ * @param rank
+ * @param tile_img
+ * @param width
+ * @param upper_halo 1 if rank has an upper neighbour
+ * @param lower_halo 1 if rank has a lower neighbour
+ * @param rows      number of core rows
+ * @param rowtype
+ */
+static void ExchangeHalo(int rank, RGB *tile_img, const int width, const int upper_halo,
+                         const int lower_halo, const int rows, MPI_Datatype rowtype)
+{
+    RGB *own = tile_img + (size_t)upper_halo * width; // move pointer according to upper_halo
+
+    int upper_neighbour;
+    if (upper_halo)
+    {
+        upper_neighbour = rank - 1;
+    }
+    else
+    {
+        upper_neighbour = MPI_PROC_NULL;
+    }
+
+    int lower_neighbour;
+
+    if (lower_halo)
+    {
+        lower_neighbour = rank + 1;
+    }
+    else
+    {
+        lower_neighbour = MPI_PROC_NULL;
+    }
+
+    // lower halo send + rec
+    //  send first row as lower halo to upper rank neighbour.
+    MPI_Sendrecv(own, 1, rowtype, upper_neighbour, 0,
+                 // and receive first row from lower naighbour rank as lower halo
+                 own + (size_t)rows * width, 1, rowtype, lower_neighbour, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+
+    // upper halo send + rec
+    //  send last row to lower nieghbour rank as upper halo
+    MPI_Sendrecv(own + (size_t)(rows - 1) * width, 1, rowtype, lower_neighbour, 1,
+                 // receive last row from upper neighbour as upper halo
+                 tile_img, 1, rowtype, upper_neighbour, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 
 int main(int argc, char *argv[])
@@ -254,13 +298,13 @@ int main(int argc, char *argv[])
     MPI_Bcast(&width, 1, MPI_INT, 0, MPI_COMM_WORLD);
     MPI_Bcast(&height, 1, MPI_INT, 0, MPI_COMM_WORLD);
 
-    //alloc sobel_full and emboss_full
+    // alloc sobel_full and emboss_full
     if (rank == 0)
     {
         sobel_full = malloc(sizeof(RGB) * (size_t)width * height);
         emboss_full = malloc(sizeof(RGB) * (size_t)width * height);
     }
-    
+
     // Tiling
     int start, rows, upper_halo, lower_halo;
     GetTiles(rank, size, height, &start, &rows, &upper_halo, &lower_halo);
@@ -270,27 +314,26 @@ int main(int argc, char *argv[])
     MPI_Type_contiguous(width * (int)sizeof(RGB), MPI_BYTE, &rowtype); // one row = width *sizeof(RGB) Bytes
     MPI_Type_commit(&rowtype);                                         // activate type
 
-    int *total_rows; // scatter: array holding rows including all ranks rows + halo rows
-    int *start_rows; // scatter: array holding start row of each rank
     int *true_rows;  // gather: array holding the true rows (without halo rows) for eah rank
     int *true_start; // gather: array holding start row of true rows for each rank
 
     if (rank == 0)
     {
-        total_rows = (int *)malloc(size * sizeof(int)); // Alloc mem
-        start_rows = (int *)malloc(size * sizeof(int));
         true_rows = (int *)malloc(size * sizeof(int));
         true_start = (int *)malloc(size * sizeof(int));
-        BuildScatterGather(size, height, total_rows, start_rows, true_rows, true_start); // Fill the arrays for scatter and gather tables
+        BuildScatterGather(size, height, true_rows, true_start); // Fill the arrays for scatter and gather tables
     }
 
     // Init mem for tile with halo rows, and tile output without halo rows
+    RGB *true_tile = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
     RGB *tile_img = (RGB *)malloc((size_t)used_rows * width * sizeof(RGB));
+
     RGB *tile_output_sobel = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
     RGB *tile_output_emboss = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
 
-    // rank 0 sends tiles (with halo rows) and each rank receives its tile to work upon
-    MPI_Scatterv(img, total_rows, start_rows, rowtype, tile_img, used_rows, rowtype, 0, MPI_COMM_WORLD);
+    // shift tile accordingly into tile_img
+    memcpy(tile_img + (size_t)upper_halo * width, true_tile, (size_t)rows * width * sizeof(RGB));
+    free(true_tile);
 
     long total_pixels = (long)used_rows * width;
 
@@ -298,6 +341,7 @@ int main(int argc, char *argv[])
     MPI_Barrier(MPI_COMM_WORLD);
     double start_timer = MPI_Wtime();
 
+    ExchangeHalo(rank, tile_img, width, upper_halo, lower_halo, rows, rowtype);
     ImageToGrayscaleParallel(tile_img, total_pixels);
 
     ApplySobelParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_sobel);
@@ -324,7 +368,6 @@ int main(int argc, char *argv[])
     double max_elapsed;
     MPI_Reduce(&local_elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
-
     if (rank == 0)
     {
         CreateBMP(outsobel, width, height);
@@ -333,7 +376,7 @@ int main(int argc, char *argv[])
         WriteRegion(outemboss, 0, 0, width, height, emboss_full);
         printf("Time: %.9f seconds\nTime to put everything together: %.9f\n", max_elapsed, max_elapsed_run);
     }
- 
+
     // Free memory
     free(tile_img);
     free(tile_output_sobel);
@@ -343,14 +386,12 @@ int main(int argc, char *argv[])
         free(img);
         free(sobel_full);
         free(emboss_full);
-        free(total_rows);
-        free(start_rows);
         free(true_rows);
         free(true_start);
     }
     MPI_Type_free(&rowtype); // free MPI type
 
     MPI_Finalize();
-    
+
     return (0);
 }
