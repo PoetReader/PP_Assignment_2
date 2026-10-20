@@ -112,39 +112,31 @@ void ApplySobelParallel(int rank, RGB *tile_img, const int width, const int uppe
 
     int local_height = upper_halo + lower_halo + rows; // calc local height basically used_rows
 
-    // print the threads working during parallelisation
-#pragma omp parallel
-    {
-#pragma omp master
-        {
-            printf("Sobel Filter => Rank %d: %d threads working\n", rank, omp_get_num_threads());
-        }
 #pragma omp parallel for collapse(2) schedule(static) // parallellise
-        for (int y = upper_halo; y < (upper_halo + rows); y++)
+    for (int y = upper_halo; y < (upper_halo + rows); y++)
+    {
+        for (int x = 0; x < width; x++)
         {
-            for (int x = 0; x < width; x++)
+
+            float pixel_x = 0.0f;
+            float pixel_y = 0.0f;
+
+            for (int con_y = -1; con_y <= 1; con_y++)
             {
-
-                float pixel_x = 0.0f;
-                float pixel_y = 0.0f;
-
-                for (int con_y = -1; con_y <= 1; con_y++)
+                for (int con_x = -1; con_x <= 1; con_x++)
                 {
-                    for (int con_x = -1; con_x <= 1; con_x++)
-                    {
-                        RGB pixel = GetPixel(tile_img, width, local_height, x + con_x, y + con_y);
-                        pixel_x += pixel.red * Gx[con_y + 1][con_x + 1];
-                        pixel_y += pixel.red * Gy[con_y + 1][con_x + 1];
-                    }
+                    RGB pixel = GetPixel(tile_img, width, local_height, x + con_x, y + con_y);
+                    pixel_x += pixel.red * Gx[con_y + 1][con_x + 1];
+                    pixel_y += pixel.red * Gy[con_y + 1][con_x + 1];
                 }
-                float res = sqrtf(pixel_x * pixel_x + pixel_y * pixel_y);
-                unsigned char final_res = (unsigned char)MIN(MAX(res, 0.0f), 255.0f);
-
-                size_t index = (size_t)(y - upper_halo) * width + x; // remember the halo row
-                tile_output[index].red = final_res;
-                tile_output[index].green = final_res;
-                tile_output[index].blue = final_res;
             }
+            float res = sqrtf(pixel_x * pixel_x + pixel_y * pixel_y);
+            unsigned char final_res = (unsigned char)MIN(MAX(res, 0.0f), 255.0f);
+
+            size_t index = (size_t)(y - upper_halo) * width + x; // remember the halo row
+            tile_output[index].red = final_res;
+            tile_output[index].green = final_res;
+            tile_output[index].blue = final_res;
         }
     }
 }
@@ -316,7 +308,7 @@ int main(int argc, char *argv[])
     long total_pixels = (long)used_rows * width;
     // Start timer
     MPI_Barrier(MPI_COMM_WORLD);
-    double start_timer = MPI_Wtime();
+    double start_scatter = MPI_Wtime();
 
     // rank 0 sends tiles (with halo rows) and each rank receives its tile to work upon
     MPI_Scatterv(img, true_rows, true_start, rowtype, true_tile, rows, rowtype, 0, MPI_COMM_WORLD);
@@ -324,21 +316,38 @@ int main(int argc, char *argv[])
     // shift tile accordingly into tile_img
     memcpy(tile_img + (size_t)upper_halo * width, true_tile, (size_t)rows * width * sizeof(RGB));
 
+    double end_scatter = MPI_Wtime() - start_scatter;
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    double start_compute = MPI_Wtime();
+
     ExchangeHalo(rank, tile_img, width, upper_halo, lower_halo, rows, rowtype);
     ImageToGrayscaleParallel(tile_img, total_pixels);
 
     ApplySobelParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_sobel);
     ApplyEmbossParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_emboss);
 
+    double end_compute = MPI_Wtime() - start_compute;
+
+    MPI_Barrier(MPI_COMM_WORLD);
+    double start_gather = MPI_Wtime();
+
     // each rank sends their tile without halo rows and rank 0 gathers the tiles
     MPI_Gatherv(tile_output_sobel, rows, rowtype, sobel_full, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
     MPI_Gatherv(tile_output_emboss, rows, rowtype, emboss_full, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
 
+    double end_gather = MPI_Wtime() - start_gather;
     // get slowest rank
     // End timer
-    double local_elapsed = MPI_Wtime() - start_timer;
-    double max_elapsed;
-    MPI_Reduce(&local_elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    double end_total = MPI_Wtime() - start_scatter;
+    double max_total;
+    double max_scatter;
+    double max_compute;
+    double max_gather;
+    MPI_Reduce(&end_total, &max_total, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&end_scatter, &max_scatter, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&end_compute, &max_compute, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
+    MPI_Reduce(&end_gather, &max_gather, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
     if (rank == 0)
     {
@@ -346,7 +355,7 @@ int main(int argc, char *argv[])
         WriteRegion(outsobel, 0, 0, width, height, sobel_full);
         CreateBMP(outemboss, width, height);
         WriteRegion(outemboss, 0, 0, width, height, emboss_full);
-        printf("Time: %.9f seconds\n", max_elapsed);
+        printf("Scatter: %.9f seconds\nCompute: %.9f seconds\nGather: %.9f seconds\nTotal: %.9f seconds\n", max_scatter, max_compute, max_gather, max_total);
     }
 
     // Free memory
