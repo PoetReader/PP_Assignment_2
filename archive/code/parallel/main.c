@@ -205,7 +205,7 @@ void ApplyEmbossParallel(int rank, RGB *tile_img, const int width, const int upp
 static void ExchangeHalo(int rank, RGB *tile_img, const int width, const int upper_halo,
                          const int lower_halo, const int rows, MPI_Datatype rowtype)
 {
-    RGB *own = tile_img + (size_t)upper_halo * width; //move pointer according to upper_halo
+    RGB *own = tile_img + (size_t)upper_halo * width; // move pointer according to upper_halo
 
     int upper_neighbour;
     if (upper_halo)
@@ -221,22 +221,24 @@ static void ExchangeHalo(int rank, RGB *tile_img, const int width, const int upp
 
     if (lower_halo)
     {
-        lower_neighbour = rank + 1; 
-    } else {
+        lower_neighbour = rank + 1;
+    }
+    else
+    {
         lower_neighbour = MPI_PROC_NULL;
     }
 
-    //lower halo send + rec
-    // send first row as lower halo to upper rank neighbour. 
-    MPI_Sendrecv(own, 1, rowtype, upper_neighbour, 0, 
-        //and receive first row from lower naighbour rank as lower halo 
-        own + (size_t)rows * width, 1, rowtype, lower_neighbour, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+    // lower halo send + rec
+    //  send first row as lower halo to upper rank neighbour.
+    MPI_Sendrecv(own, 1, rowtype, upper_neighbour, 0,
+                 // and receive first row from lower naighbour rank as lower halo
+                 own + (size_t)rows * width, 1, rowtype, lower_neighbour, 0, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 
-    //upper halo send + rec
-    // send last row to lower nieghbour rank as upper halo
+    // upper halo send + rec
+    //  send last row to lower nieghbour rank as upper halo
     MPI_Sendrecv(own + (size_t)(rows - 1) * width, 1, rowtype, lower_neighbour, 1,
-    //receive last row from upper neighbour as upper halo
-    tile_img, 1, rowtype, upper_neighbour, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
+                 // receive last row from upper neighbour as upper halo
+                 tile_img, 1, rowtype, upper_neighbour, 1, MPI_COMM_WORLD, MPI_STATUS_IGNORE);
 }
 
 int main(int argc, char *argv[])
@@ -294,8 +296,8 @@ int main(int argc, char *argv[])
     MPI_Type_contiguous(width * (int)sizeof(RGB), MPI_BYTE, &rowtype); // one row = width *sizeof(RGB) Bytes
     MPI_Type_commit(&rowtype);                                         // activate type
 
-    int *true_rows;                                                    // array holding the true rows (without halo rows) for eah rank
-    int *true_start;                                                   // array holding start row of true rows for each rank
+    int *true_rows;  // array holding the true rows (without halo rows) for eah rank
+    int *true_start; // array holding start row of true rows for each rank
 
     if (rank == 0)
     {
@@ -311,19 +313,16 @@ int main(int argc, char *argv[])
     RGB *tile_output_sobel = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
     RGB *tile_output_emboss = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
 
-    // rank 0 sends tiles (with halo rows) and each rank receives its tile to work upon
-    MPI_Scatterv(img, true_rows, true_start, rowtype, true_tile, rows, rowtype, 0, MPI_COMM_WORLD);
-
-    //shift tile accordingly into tile_img
-    memcpy(tile_img + (size_t)upper_halo * width, true_tile, (size_t)rows * width * sizeof(RGB));
-    free(true_tile);
-    
-
     long total_pixels = (long)used_rows * width;
-
     // Start timer
     MPI_Barrier(MPI_COMM_WORLD);
     double start_timer = MPI_Wtime();
+
+    // rank 0 sends tiles (with halo rows) and each rank receives its tile to work upon
+    MPI_Scatterv(img, true_rows, true_start, rowtype, true_tile, rows, rowtype, 0, MPI_COMM_WORLD);
+
+    // shift tile accordingly into tile_img
+    memcpy(tile_img + (size_t)upper_halo * width, true_tile, (size_t)rows * width * sizeof(RGB));
 
     ExchangeHalo(rank, tile_img, width, upper_halo, lower_halo, rows, rowtype);
     ImageToGrayscaleParallel(tile_img, total_pixels);
@@ -331,22 +330,13 @@ int main(int argc, char *argv[])
     ApplySobelParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_sobel);
     ApplyEmbossParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_emboss);
 
-    // End timer
-    double local_elapsed = MPI_Wtime() - start_timer;
-    // Start timer to measure gathering time
-    MPI_Barrier(MPI_COMM_WORLD);
-    double start_timer_run = MPI_Wtime();
-
     // each rank sends their tile without halo rows and rank 0 gathers the tiles
     MPI_Gatherv(tile_output_sobel, rows, rowtype, sobel_full, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
     MPI_Gatherv(tile_output_emboss, rows, rowtype, emboss_full, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
 
-    // End timer to measure gathering time
-    double local_elapsed_run = MPI_Wtime() - start_timer_run;
-    double max_elapsed_run;
-    MPI_Reduce(&local_elapsed_run, &max_elapsed_run, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-
     // get slowest rank
+    // End timer
+    double local_elapsed = MPI_Wtime() - start_timer;
     double max_elapsed;
     MPI_Reduce(&local_elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
@@ -356,14 +346,14 @@ int main(int argc, char *argv[])
         WriteRegion(outsobel, 0, 0, width, height, sobel_full);
         CreateBMP(outemboss, width, height);
         WriteRegion(outemboss, 0, 0, width, height, emboss_full);
-        printf("Time: %.9f seconds\nTime to put everything together: %.9f\n", max_elapsed, max_elapsed_run);
+        printf("Time: %.9f seconds\n", max_elapsed);
     }
 
     // Free memory
     free(tile_img);
     free(tile_output_sobel);
     free(tile_output_emboss);
-
+    free(true_tile);
     if (rank == 0)
     {
         free(img);

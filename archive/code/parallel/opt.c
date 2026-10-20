@@ -279,8 +279,8 @@ int main(int argc, char *argv[])
     }
 
     const char *marguerite = argv[1];
-    const char *outsobel = "sobelparallel.bmp";
-    const char *outemboss = "emboss.bmp";
+    const char *outsobel = "sobelOpt.bmp";
+    const char *outemboss = "embossOpt.bmp";
 
     int width, height; // Get image dimensions
     RGB *img;
@@ -331,15 +331,17 @@ int main(int argc, char *argv[])
     RGB *tile_output_sobel = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
     RGB *tile_output_emboss = (RGB *)malloc((size_t)rows * width * sizeof(RGB));
 
-    // shift tile accordingly into tile_img
-    memcpy(tile_img + (size_t)upper_halo * width, true_tile, (size_t)rows * width * sizeof(RGB));
-    free(true_tile);
-
     long total_pixels = (long)used_rows * width;
 
     // Start timer
     MPI_Barrier(MPI_COMM_WORLD);
     double start_timer = MPI_Wtime();
+
+    // rank 0 sends tiles (with halo rows) and each rank receives its tile to work upon
+    MPI_Scatterv(img, true_rows, true_start, rowtype, true_tile, rows, rowtype, 0, MPI_COMM_WORLD);
+
+    // shift tile accordingly into tile_img
+    memcpy(tile_img + (size_t)upper_halo * width, true_tile, (size_t)rows * width * sizeof(RGB));
 
     ExchangeHalo(rank, tile_img, width, upper_halo, lower_halo, rows, rowtype);
     ImageToGrayscaleParallel(tile_img, total_pixels);
@@ -347,24 +349,13 @@ int main(int argc, char *argv[])
     ApplySobelParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_sobel);
     ApplyEmbossParallel(rank, tile_img, width, upper_halo, lower_halo, rows, tile_output_emboss);
 
-    // End timer
-    double local_elapsed = MPI_Wtime() - start_timer;
-    // each rank sends their tile without halo rows and rank 0 gathers the tiles
-
-    // Start timer to measure gathering time
-    MPI_Barrier(MPI_COMM_WORLD);
-    double start_timer_run = MPI_Wtime();
-
     // each rank sends their tile without halo rows and rank 0 gathers the tiles
     MPI_Gatherv(tile_output_sobel, rows, rowtype, img, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
     MPI_Gatherv(tile_output_emboss, rows, rowtype, emboss_full, true_rows, true_start, rowtype, 0, MPI_COMM_WORLD);
 
-    // End timer to measure gathering time
-    double local_elapsed_run = MPI_Wtime() - start_timer_run;
-    double max_elapsed_run;
-    MPI_Reduce(&local_elapsed_run, &max_elapsed_run, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
-
     // get slowest rank
+    // End timer
+    double local_elapsed = MPI_Wtime() - start_timer;
     double max_elapsed;
     MPI_Reduce(&local_elapsed, &max_elapsed, 1, MPI_DOUBLE, MPI_MAX, 0, MPI_COMM_WORLD);
 
@@ -374,10 +365,11 @@ int main(int argc, char *argv[])
         WriteRegion(outsobel, 0, 0, width, height, sobel_full);
         CreateBMP(outemboss, width, height);
         WriteRegion(outemboss, 0, 0, width, height, emboss_full);
-        printf("Time: %.9f seconds\nTime to put everything together: %.9f\n", max_elapsed, max_elapsed_run);
+        printf("Time: %.9f seconds\n", max_elapsed);
     }
 
     // Free memory
+    free(true_tile);
     free(tile_img);
     free(tile_output_sobel);
     free(tile_output_emboss);
