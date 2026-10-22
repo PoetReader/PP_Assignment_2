@@ -354,7 +354,7 @@ int main(int argc, char *argv[])
     MPI_Barrier(MPI_COMM_WORLD);
     double start_scatter = MPI_Wtime();
 
-    // rank 0 sends tiles (with halo rows) and each rank receives its tile to work upon
+    // rank 0 sends tiles  and each rank receives its tile to work upon
     MPI_Scatterv(img, true_rows, true_start, rowtype, true_tile, rows, rowtype, 0, MPI_COMM_WORLD);
 
     // shift tile accordingly into tile_img

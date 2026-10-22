@@ -7,6 +7,9 @@ HOSTFILE=hostfile
 # Number of threads:
 T=1
 
+# Ranks per node (e.g. 1 = one rank per node):
+RPN=1
+
 # adress of image
 
 IMG=bild.bmp
@@ -23,14 +26,13 @@ run: main
 	mpiexec -n $(N) $(MPIEXEC_OPTS) ./main bild.bmp
 
 cluster: main
-	mpirun -np $(N) --hostfile $(HOSTFILE) --map-by ppr:1:node --bind-to none \
+	mpirun -np $(N) --hostfile $(HOSTFILE) --map-by ppr:$(RPN):node --bind-to none \
 		--report-bindings -x OMP_NUM_THREADS=$(T) ./main $(IMG)
 
 opt: opt_main
-	mpirun -np $(N) --hostfile $(HOSTFILE) --map-by ppr:1:node --bind-to none \
-		--report-bindings -x OMP_NUM_THREADS=$(T) ./opt?main $(IMG)
-
+	mpirun -np $(N) --hostfile $(HOSTFILE) --map-by ppr:$(RPN):node --bind-to none \
+		--report-bindings -x OMP_NUM_THREADS=$(T) ./opt_main $(IMG)
 clean:
-	@rm -f main sobelparallel.bmp
+	@rm -f main sobelparallel.bmp embossparallel.bmp embossOpt.bmp sobelOpt.bmp
 
 .PHONY: clean
